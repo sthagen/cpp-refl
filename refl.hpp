@@ -829,8 +829,14 @@ namespace refl {
         template <typename TypeList>
         using reverse_t = typename reverse<TypeList>::type;
 
-        template <typename, typename>
+        template <typename...>
         struct concat;
+
+        template <typename... Ts>
+        struct concat<type_list<Ts...>>
+        {
+            using type = type_list<Ts...>;
+        };
 
         /**
          * Concatenates two lists together.
@@ -842,11 +848,19 @@ namespace refl {
         };
 
         /**
+         * Concatenates N lists together.
+         */
+        template <typename TypeList1, typename TypeList2, typename... TypeLists>
+        struct concat<TypeList1, TypeList2, TypeLists...> : concat<typename concat<TypeList1, TypeList2>::type, TypeLists...>
+        {
+        };
+
+        /**
          * Concatenates two lists together.
          * @see concat
          */
-        template <typename Lhs, typename Rhs>
-        using concat_t = typename concat<Lhs, Rhs>::type;
+        template <typename... Ts>
+        using concat_t = typename concat<Ts...>::type;
 
         /**
          * Appends a type to the list.
@@ -975,8 +989,8 @@ namespace refl {
          * with a typedef named "type" (e.g. std::remove_reference)
          * @see map
          */
-        template <template<typename> typename Mapper, typename... Ts>
-        using map_t = typename map<Mapper, Ts...>::type;
+        template <template<typename> typename Mapper, typename TypeList>
+        using map_t = typename map<Mapper, TypeList>::type;
 
         namespace detail
         {
@@ -1073,7 +1087,7 @@ namespace refl {
             struct contains_base_impl<T, type_list<Ts...>> : std::disjunction<std::is_base_of<T, std::remove_cv_t<Ts>>...>
             {
             };
-        }
+        } // namespace detail
 
         /**
          * Checks whether T is contained in the list of types.
@@ -1116,12 +1130,46 @@ namespace refl {
         {
         };
 
+        namespace detail
+        {
+            template <typename, typename>
+            struct unique_impl;
+
+            template <typename UniqueList>
+            struct unique_impl<UniqueList, type_list<>>
+            {
+                using type = UniqueList;
+            };
+
+            template <typename UniqueList, typename T, typename... Ts>
+            struct unique_impl<UniqueList, type_list<T, Ts...>> :
+                std::conditional_t<contains_v<T, UniqueList>,
+                    unique_impl<UniqueList, type_list<Ts...>>,
+                    unique_impl<append_t<T, UniqueList>, type_list<Ts...>>>
+            {
+            };
+        } // namespace detail
+
         /**
          * Checks whether a type deriving from T is contained in the list of types.
          * @see contains_base
          */
         template <typename T, typename TypeList>
         [[maybe_unused]] static constexpr bool contains_base_v = contains_base<T, TypeList>::value;
+
+        /**
+         * Creates a new list containing the repeating elements in the source list only once.
+         */
+        template <typename T>
+        struct unique : detail::unique_impl<type_list<>, T>
+        {
+        };
+
+        /**
+         * Creates a new list containing the repeating elements in the source list only once.
+         */
+        template <typename T>
+        using unique_t = typename unique<T>::type;
 
     } // namespace trait
 
@@ -1182,6 +1230,9 @@ namespace refl {
              */
             struct any : public member, public type {};
         }
+
+        template <typename...>
+        struct base_types;
     } // namespace attr
 
     namespace descriptor
@@ -1292,314 +1343,17 @@ namespace refl {
         template <typename T>
         [[maybe_unused]] static constexpr bool is_descriptor_v{ is_descriptor<T>::value };
 
-    }
-
-    /**
-     * @brief Contains the basic reflection primitives
-     * as well as functions operating on those primitives
-     */
-    namespace descriptor
-    {
-        /**
-         * @brief The base type for member descriptors.
-         */
-        template <typename T, size_t N>
-        class member_descriptor_base
-        {
-        protected:
-
-            typedef typename refl_impl::metadata::type_info__<T>::template member<N> member;
-
-        public:
-
-            /** An alias for the declaring type of the reflected member. */
-            typedef T declaring_type;
-
-            /** An alias specifying the member type of member. */
-            typedef typename member::member_type member_type;
-
-            /** An alias specifying the types of the attributes of the member. (Removes CV-qualifiers.) */
-            typedef trait::as_type_list_t<std::remove_cv_t<decltype(member::attributes)>> attribute_types;
-
-            /** The type_descriptor of the declaring type. */
-            static constexpr type_descriptor<T> declarator{ };
-
-            /** The name of the reflected type. */
-            static constexpr auto name{ member::name };
-
-            /** The attributes of the reflected member. */
-            static constexpr auto attributes{ member::attributes };
-
-        };
-
         namespace detail
         {
-            template <typename Member>
-            struct static_field_invoker
+            template <typename T>
+            struct get_type_descriptor
             {
-                static constexpr auto invoke() -> decltype(*Member::pointer)
-                {
-                    return *Member::pointer;
-                }
-
-                template <typename U, typename M = Member, std::enable_if_t<M::is_writable, int> = 0>
-                static constexpr auto invoke(U&& value) -> decltype(*Member::pointer = std::forward<U>(value))
-                {
-                    return *Member::pointer = std::forward<U>(value);
-                }
+                typedef descriptor::type_descriptor<T> type;
             };
-
-            template <typename Member>
-            struct instance_field_invoker
-            {
-                template <typename T>
-                static constexpr auto invoke(T&& target) -> decltype(target.*(Member::pointer))
-                {
-                    return target.*(Member::pointer);
-                }
-
-                template <typename T, typename U, typename M = Member, std::enable_if_t<M::is_writable, int> = 0>
-                static constexpr auto invoke(T&& target, U&& value) -> decltype(target.*(Member::pointer) = std::forward<U>(value))
-                {
-                    return target.*(Member::pointer) = std::forward<U>(value);
-                }
-            };
-
-            template <typename Member>
-            static_field_invoker<Member> field_type_switch(std::true_type);
-
-            template <typename Member>
-            instance_field_invoker<Member> field_type_switch(std::false_type);
         } // namespace detail
 
-        /**
-         * @brief Represents a reflected field.
-         */
-        template <typename T, size_t N>
-        class field_descriptor : public member_descriptor_base<T, N>
-        {
-            using typename member_descriptor_base<T, N>::member;
-            static_assert(trait::is_field_v<member>);
+    } // namespace trait
 
-        public:
-
-            /** Type value type of the member. */
-            typedef typename member::value_type value_type;
-
-            /** Whether the field is static or not. */
-            static constexpr bool is_static{ !std::is_member_object_pointer_v<decltype(member::pointer)> };
-
-            /** Whether the field is const or not. */
-            static constexpr bool is_writable{ !std::is_const_v<value_type> };
-
-            /** A member pointer to the reflected field of the appropriate type. */
-            static constexpr auto pointer{ member::pointer };
-
-        private:
-
-            using invoker = decltype(detail::field_type_switch<field_descriptor>(std::bool_constant<is_static>{}));
-
-        public:
-
-            /** Returns the value of the field. (for static fields). */
-            template <decltype(nullptr) = nullptr>
-            static constexpr decltype(auto) get() noexcept
-            {
-                return *member::pointer;
-            }
-
-            /** Returns the value of the field. (for instance fields). */
-            template <typename U>
-            static constexpr decltype(auto) get(U&& target) noexcept
-            {
-                return target.*(member::pointer);
-            }
-
-            /** A synonym for get(). */
-            template <typename... Args>
-            constexpr auto operator()(Args&&... args) const noexcept -> decltype(invoker::invoke(std::forward<Args>(args)...))
-            {
-                return invoker::invoke(std::forward<Args>(args)...);
-            }
-
-        };
-
-        namespace detail
-        {
-            template <typename Member>
-            constexpr decltype(nullptr) get_function_pointer(...)
-            {
-                return nullptr;
-            }
-
-            template <typename Member>
-            constexpr auto get_function_pointer(int) -> decltype(Member::pointer())
-            {
-                return Member::pointer();
-            }
-
-            template <typename Member, typename Pointer>
-            constexpr decltype(nullptr) resolve_function_pointer(...)
-            {
-                return nullptr;
-            }
-
-            template <typename Member, typename Pointer>
-            constexpr auto resolve_function_pointer(int) -> decltype(Member::template resolve<Pointer>())
-            {
-                return Member::template resolve<Pointer>();
-            }
-        }
-
-        /**
-         * @brief Represents a reflected function.
-         */
-        template <typename T, size_t N>
-        class function_descriptor : public member_descriptor_base<T, N>
-        {
-            using typename member_descriptor_base<T, N>::member;
-            static_assert(trait::is_function_v<member>);
-
-        public:
-
-            /**
-             * Invokes the function with the given arguments.
-             * If the function is an instance function, a reference
-             * to the instance is provided as first argument.
-             */
-            template <typename... Args>
-            static constexpr auto invoke(Args&&... args) -> decltype(member::invoke(std::declval<Args>()...))
-            {
-                return member::invoke(std::forward<Args>(args)...);
-            }
-
-            /** The return type of an invocation of this member with Args... (as if by invoke(...)). */
-            template <typename... Args>
-            using return_type = decltype(member::invoke(std::declval<Args>()...));
-
-            /** A synonym for invoke(args...). */
-            template <typename... Args>
-            constexpr auto operator()(Args&&... args) const -> decltype(invoke(std::declval<Args>()...))
-            {
-                return invoke(std::forward<Args>(args)...);
-            }
-
-            /**
-             * Returns a pointer to a non-overloaded function.
-             */
-            static constexpr auto pointer{ detail::get_function_pointer<member>(0) };
-
-            /**
-             * Whether the pointer member was correctly resolved to a concrete implementation.
-             * If this field is false, resolve() would need to be called instead.
-             */
-            static constexpr bool is_resolved{ !std::is_same_v<decltype(pointer), const decltype(nullptr)> };
-
-            /**
-             * Whether the pointer can be resolved as with the specified type.
-             */
-            template <typename Pointer>
-            static constexpr bool can_resolve()
-            {
-                return !std::is_same_v<decltype(resolve<Pointer>()), decltype(nullptr)>;
-            }
-
-            /**
-             * Resolves the function pointer as being of type Pointer.
-             * Required when taking a pointer to an overloaded function.
-             */
-            template <typename Pointer>
-            static constexpr auto resolve()
-            {
-                return detail::resolve_function_pointer<member, Pointer>(0);
-            }
-
-        };
-
-        namespace detail
-        {
-            template <typename T, size_t N>
-            using make_descriptor = std::conditional_t<refl::trait::is_field_v<typename refl_impl::metadata::type_info__<T>::template member<N>>,
-                field_descriptor<T, N>,
-                std::conditional_t<refl::trait::is_function_v<typename refl_impl::metadata::type_info__<T>::template member<N>>,
-                    function_descriptor<T, N>,
-                    void
-                >>;
-
-            template <typename T, size_t... Idx>
-            type_list<make_descriptor<T, Idx>...> enumerate_members(std::index_sequence<Idx...>);
-
-        } // namespace detail
-
-        /** A type_list of the member descriptors of the target type T. */
-        template <typename T>
-        using member_list = decltype(detail::enumerate_members<T>(std::make_index_sequence<refl_impl::metadata::type_info__<T>::member_count>{}));
-
-        /** Represents a reflected type. */
-        template <typename T>
-        class type_descriptor
-        {
-        private:
-
-            static_assert(refl::trait::is_reflectable_v<T>, "This type does not support reflection!");
-
-            typedef refl_impl::metadata::type_info__<T> type_info;
-
-        public:
-
-            /** The reflected type T. */
-            typedef T type;
-
-            /** A synonym for member_list<T>. */
-            typedef member_list<T> member_types;
-
-            /** An alias specifying the types of the attributes of the member. (Removes CV-qualifiers.) */
-            typedef trait::as_type_list_t<std::remove_cv_t<decltype(type_info::attributes)>> attribute_types;
-
-            /** The list of member descriptors. */
-            static constexpr member_list<T> members{  };
-
-            /** The name of the reflected type. */
-            static constexpr const auto name{ type_info::name };
-
-            /** The attributes of the reflected type. */
-            static constexpr const auto attributes{ type_info::attributes };
-
-        };
-    }
-
-    using descriptor::member_list;
-    using descriptor::field_descriptor;
-    using descriptor::function_descriptor;
-    using descriptor::type_descriptor;
-
-    /** Returns true if the type T is reflectable. */
-    template <typename T>
-    constexpr bool is_reflectable() noexcept
-    {
-        return trait::is_reflectable_v<T>;
-    }
-
-    /** Returns true if the non-qualified type T is reflectable.*/
-    template <typename T>
-    constexpr bool is_reflectable(const T&) noexcept
-    {
-        return trait::is_reflectable_v<T>;
-    }
-
-    /** Returns the type descriptor for the type T. */
-    template<typename T>
-    constexpr type_descriptor<T> reflect() noexcept
-    {
-        return {};
-    }
-
-    /** Returns the type descriptor for the non-qualified type T. */
-    template<typename T>
-    constexpr type_descriptor<T> reflect(const T&) noexcept
-    {
-        return {};
-    }
 
     namespace util
     {
@@ -1944,6 +1698,391 @@ namespace refl {
 
     } // namespace util
 
+    /**
+     * @brief Contains the basic reflection primitives
+     * as well as functions operating on those primitives
+     */
+    namespace descriptor
+    {
+        /**
+         * @brief The base type for member descriptors.
+         */
+        template <typename T, size_t N>
+        class member_descriptor_base
+        {
+        protected:
+
+            typedef typename refl_impl::metadata::type_info__<T>::template member<N> member;
+
+        public:
+
+            /** An alias for the declaring type of the reflected member. */
+            typedef T declaring_type;
+
+            /** An alias specifying the member type of member. */
+            typedef typename member::member_type member_type;
+
+            /** An alias specifying the types of the attributes of the member. (Removes CV-qualifiers.) */
+            typedef trait::as_type_list_t<std::remove_cv_t<decltype(member::attributes)>> attribute_types;
+
+            /** The type_descriptor of the declaring type. */
+            static constexpr type_descriptor<T> declarator{ };
+
+            /** The name of the reflected type. */
+            static constexpr auto name{ member::name };
+
+            /** The attributes of the reflected member. */
+            static constexpr auto attributes{ member::attributes };
+
+        };
+
+        namespace detail
+        {
+            template <typename Member>
+            struct static_field_invoker
+            {
+                static constexpr auto invoke() -> decltype(*Member::pointer)
+                {
+                    return *Member::pointer;
+                }
+
+                template <typename U, typename M = Member, std::enable_if_t<M::is_writable, int> = 0>
+                static constexpr auto invoke(U&& value) -> decltype(*Member::pointer = std::forward<U>(value))
+                {
+                    return *Member::pointer = std::forward<U>(value);
+                }
+            };
+
+            template <typename Member>
+            struct instance_field_invoker
+            {
+                template <typename T>
+                static constexpr auto invoke(T&& target) -> decltype(target.*(Member::pointer))
+                {
+                    return target.*(Member::pointer);
+                }
+
+                template <typename T, typename U, typename M = Member, std::enable_if_t<M::is_writable, int> = 0>
+                static constexpr auto invoke(T&& target, U&& value) -> decltype(target.*(Member::pointer) = std::forward<U>(value))
+                {
+                    return target.*(Member::pointer) = std::forward<U>(value);
+                }
+            };
+
+            template <typename Member>
+            static_field_invoker<Member> field_type_switch(std::true_type);
+
+            template <typename Member>
+            instance_field_invoker<Member> field_type_switch(std::false_type);
+        } // namespace detail
+
+        /**
+         * @brief Represents a reflected field.
+         */
+        template <typename T, size_t N>
+        class field_descriptor : public member_descriptor_base<T, N>
+        {
+            using typename member_descriptor_base<T, N>::member;
+            static_assert(trait::is_field_v<member>);
+
+        public:
+
+            /** Type value type of the member. */
+            typedef typename member::value_type value_type;
+
+            /** Whether the field is static or not. */
+            static constexpr bool is_static{ !std::is_member_object_pointer_v<decltype(member::pointer)> };
+
+            /** Whether the field is const or not. */
+            static constexpr bool is_writable{ !std::is_const_v<value_type> };
+
+            /** A member pointer to the reflected field of the appropriate type. */
+            static constexpr auto pointer{ member::pointer };
+
+        private:
+
+            using invoker = decltype(detail::field_type_switch<field_descriptor>(std::bool_constant<is_static>{}));
+
+        public:
+
+            /** Returns the value of the field. (for static fields). */
+            template <decltype(nullptr) = nullptr>
+            static constexpr decltype(auto) get() noexcept
+            {
+                return *member::pointer;
+            }
+
+            /** Returns the value of the field. (for instance fields). */
+            template <typename U>
+            static constexpr decltype(auto) get(U&& target) noexcept
+            {
+                return target.*(member::pointer);
+            }
+
+            /** A synonym for get(). */
+            template <typename... Args>
+            constexpr auto operator()(Args&&... args) const noexcept -> decltype(invoker::invoke(std::forward<Args>(args)...))
+            {
+                return invoker::invoke(std::forward<Args>(args)...);
+            }
+
+        };
+
+        namespace detail
+        {
+            template <typename Member>
+            constexpr decltype(nullptr) get_function_pointer(...)
+            {
+                return nullptr;
+            }
+
+            template <typename Member>
+            constexpr auto get_function_pointer(int) -> decltype(Member::pointer())
+            {
+                return Member::pointer();
+            }
+
+            template <typename Member, typename Pointer>
+            constexpr decltype(nullptr) resolve_function_pointer(...)
+            {
+                return nullptr;
+            }
+
+            template <typename Member, typename Pointer>
+            constexpr auto resolve_function_pointer(int) -> decltype(Member::template resolve<Pointer>())
+            {
+                return Member::template resolve<Pointer>();
+            }
+        }
+
+        /**
+         * @brief Represents a reflected function.
+         */
+        template <typename T, size_t N>
+        class function_descriptor : public member_descriptor_base<T, N>
+        {
+            using typename member_descriptor_base<T, N>::member;
+            static_assert(trait::is_function_v<member>);
+
+        public:
+
+            /**
+             * Invokes the function with the given arguments.
+             * If the function is an instance function, a reference
+             * to the instance is provided as first argument.
+             */
+            template <typename... Args>
+            static constexpr auto invoke(Args&&... args) -> decltype(member::invoke(std::declval<Args>()...))
+            {
+                return member::invoke(std::forward<Args>(args)...);
+            }
+
+            /** The return type of an invocation of this member with Args... (as if by invoke(...)). */
+            template <typename... Args>
+            using return_type = decltype(member::invoke(std::declval<Args>()...));
+
+            /** A synonym for invoke(args...). */
+            template <typename... Args>
+            constexpr auto operator()(Args&&... args) const -> decltype(invoke(std::declval<Args>()...))
+            {
+                return invoke(std::forward<Args>(args)...);
+            }
+
+            /**
+             * Returns a pointer to a non-overloaded function.
+             */
+            static constexpr auto pointer{ detail::get_function_pointer<member>(0) };
+
+            /**
+             * Whether the pointer member was correctly resolved to a concrete implementation.
+             * If this field is false, resolve() would need to be called instead.
+             */
+            static constexpr bool is_resolved{ !std::is_same_v<decltype(pointer), const decltype(nullptr)> };
+
+            /**
+             * Whether the pointer can be resolved as with the specified type.
+             */
+            template <typename Pointer>
+            static constexpr bool can_resolve()
+            {
+                return !std::is_same_v<decltype(resolve<Pointer>()), decltype(nullptr)>;
+            }
+
+            /**
+             * Resolves the function pointer as being of type Pointer.
+             * Required when taking a pointer to an overloaded function.
+             */
+            template <typename Pointer>
+            static constexpr auto resolve()
+            {
+                return detail::resolve_function_pointer<member, Pointer>(0);
+            }
+
+        };
+
+        namespace detail
+        {
+            template <typename T>
+            using type_info = refl_impl::metadata::type_info__<T>;
+
+            template <typename T, size_t N>
+            using make_descriptor = std::conditional_t<refl::trait::is_field_v<typename type_info<T>::template member<N>>,
+                field_descriptor<T, N>,
+                std::conditional_t<refl::trait::is_function_v<typename type_info<T>::template member<N>>,
+                    function_descriptor<T, N>,
+                    void
+                >>;
+
+            template <typename T>
+            type_list<> enumerate_members(std::index_sequence<>);
+
+            template <typename T, size_t... Idx>
+            type_list<make_descriptor<T, Idx>...> enumerate_members(std::index_sequence<Idx...>);
+
+            template <typename T>
+            struct declared_member_list
+            {
+                static_assert(refl::trait::is_reflectable_v<T>, "This type does not support reflection!");
+                using type = decltype(enumerate_members<T>(std::make_index_sequence<type_info<T>::member_count>{}));
+            };
+
+            template <typename T>
+            using attribute_types = trait::as_type_list_t<std::remove_cv_t<decltype(type_info<T>::attributes)>>;
+
+            template <typename>
+            struct flatten;
+
+            template <typename... TypeLists>
+            struct flatten<type_list<TypeLists...>> : trait::concat<TypeLists...>
+            {
+            };
+
+            template <typename T>
+            struct declared_base_type_list
+            {
+                static constexpr auto get()
+                {
+                    if constexpr (trait::contains_instance_v<attr::base_types, attribute_types<T>>) {
+                        using base_types_type = trait::remove_qualifiers_t<decltype(util::get_instance<attr::base_types>(type_info<T>::attributes))>;
+                        return typename base_types_type::list_type{};
+                    }
+                    else {
+                        return type_list<T>{};
+                    }
+                }
+
+                using type = decltype(get());
+            };
+
+            template <typename T>
+            struct base_type_list
+            {
+                static constexpr auto get()
+                {
+                    if constexpr (trait::contains_instance_v<attr::base_types, attribute_types<T>>) {
+                        using rec_base_type_list = typename flatten<trait::map_t<base_type_list, typename declared_base_type_list<T>::type>>::type;
+                        return trait::unique_t<trait::prepend_t<T, rec_base_type_list>>{};
+                    }
+                    else {
+                        return type_list<T>{};
+                    }
+                }
+
+                using type = decltype(get());
+            };
+
+            template <typename T>
+            struct member_list : flatten<trait::map_t<declared_member_list, typename base_type_list<T>::type>>
+            {
+            };
+        } // namespace detail
+
+        /** A type_list of the declared member descriptors of the target type T. */
+        template <typename T>
+        using declared_member_list = typename detail::declared_member_list<T>::type;
+
+        /** A type_list of the declared and inherited member descriptors of the target type T. */
+        template <typename T>
+        using member_list = typename detail::member_list<T>::type;
+
+        /** Represents a reflected type. */
+        template <typename T>
+        class type_descriptor
+        {
+        private:
+
+            static_assert(refl::trait::is_reflectable_v<T>, "This type does not support reflection!");
+
+            typedef refl_impl::metadata::type_info__<T> type_info;
+
+        public:
+
+            /** The reflected type T. */
+            typedef T type;
+
+            typedef typename detail::declared_base_type_list<T>::type declared_base_type_list;
+            typedef typename detail::base_type_list<T>::type base_type_list;
+
+            /** A synonym for declared_member_list<T>. */
+            typedef declared_member_list<T> declared_member_types;
+
+            /** A synonym for member_list<T>. */
+            typedef member_list<T> member_types;
+
+            /** An alias specifying the types of the attributes of the member. (Removes CV-qualifiers.) */
+            typedef detail::attribute_types<T> attribute_types;
+
+            static constexpr trait::map_t<trait::detail::get_type_descriptor, declared_base_type_list> declared_bases{};
+
+            static constexpr trait::map_t<trait::detail::get_type_descriptor, base_type_list> bases{};
+
+            /** The list of member descriptors. */
+            static constexpr member_list<T> members{  };
+
+            /** The name of the reflected type. */
+            static constexpr const auto name{ type_info::name };
+
+            /** The attributes of the reflected type. */
+            static constexpr const auto attributes{ type_info::attributes };
+
+        };
+    } // namespace descriptor
+
+    using descriptor::member_list;
+    using descriptor::declared_member_list;
+
+    using descriptor::field_descriptor;
+    using descriptor::function_descriptor;
+    using descriptor::type_descriptor;
+
+    /** Returns true if the type T is reflectable. */
+    template <typename T>
+    constexpr bool is_reflectable() noexcept
+    {
+        return trait::is_reflectable_v<T>;
+    }
+
+    /** Returns true if the non-qualified type T is reflectable.*/
+    template <typename T>
+    constexpr bool is_reflectable(const T&) noexcept
+    {
+        return trait::is_reflectable_v<T>;
+    }
+
+    /** Returns the type descriptor for the type T. */
+    template<typename T>
+    constexpr type_descriptor<T> reflect() noexcept
+    {
+        return {};
+    }
+
+    /** Returns the type descriptor for the non-qualified type T. */
+    template<typename T>
+    constexpr type_descriptor<T> reflect(const T&) noexcept
+    {
+        return {};
+    }
+
     namespace attr
     {
         /**
@@ -2165,15 +2304,6 @@ namespace refl {
             }
         }
 
-        namespace detail
-        {
-            template <typename T>
-            struct get_type_descriptor
-            {
-                typedef type_descriptor<T> type;
-            };
-        } // namespace detail
-
         /**
          * Checks if a type has a bases attribute.
          *
@@ -2200,7 +2330,7 @@ namespace refl {
 
             constexpr auto bases = get_attribute<attr::base_types>(t);
             using base_types = typename decltype(bases)::list_type;
-            return trait::map_t<detail::get_type_descriptor, base_types>{};
+            return trait::map_t<trait::detail::get_type_descriptor, base_types>{};
         }
 
         /**
